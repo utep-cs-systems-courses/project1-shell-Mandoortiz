@@ -5,12 +5,13 @@ Program meant to replicate functionality of a shell
 """
 import os, sys, re
 
-def handleInput(userInput):
+def handleInput(input_args):
     """
     used to manage input and pick between different shell possibilities
     """
-    args = userInput.split(' ')
-    if userInput.lower() == 'exit':
+    args = input_args.split(' ')
+    if input_args.lower() == 'exit':
+        os.write(1,("Goodbye\n").encode())
         sys.exit(0)
     elif len(args) == 0:
         pass
@@ -20,7 +21,7 @@ def handleInput(userInput):
             os.write(1, (os.getcwd()+"\n").encode())
         except FileNotFoundError:
             os.write(1, ("Directory %s: No such file or directory\n" % args[1]).encode())
-    elif '/' in args[0][0]:
+    elif '/' in args[0]:
         callExecve(args[0], args)
         os.write(2, ("Command %s No such command.\n" % args[0]).encode())
         sys.exit(1)# terminate with error
@@ -32,8 +33,10 @@ def execute(args):
     """
     forks and attempts to execute program using callExecve()
     """
-    pid = os.getpid()
     rc = os.fork()
+    wait = True
+    if '&' in args:
+        wait = False
     if rc < 0:
         os.write(2, ("fork failed, returning %d\n" % rc).encode())
         sys.exit(1)
@@ -45,7 +48,10 @@ def execute(args):
         sys.exit(1) # terminate with error
 
     else:
-        childpid = os.wait()
+        if wait:
+            childpid = os.wait()
+            if childpid[1] != 0 and childpid[1] != 256:
+                os.write(2, ("Program terminated with exit code: %d\n" % childpid[1]).encode())
 
 
 def callExecve(program, args):
@@ -56,8 +62,6 @@ def callExecve(program, args):
         os.execve(program, args, os.environ) # try to execute program
     except FileNotFoundError:
         pass
-    except IndexError:
-        sys.exit(1)
     except Exception:
         sys.exit(1)
 
@@ -70,9 +74,12 @@ while True:
         os.write(1, ("$ ").encode())
 
     try:
-        userInput = input()
+        args = os.read(0, 1024)
+        if len(args) == 0:
+            break
+        args = args.decode().split("\n")
+        for arg in args:
+            handleInput(arg)
     except EOFError:
         sys.exit(1)
-
-    handleInput(userInput)
     
