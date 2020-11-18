@@ -5,56 +5,114 @@ Program meant to replicate functionality of a shell
 """
 import os, sys, re
 
-def handleInput(input_args):
+def handleInput(args):
     """
     used to manage input and pick between different shell possibilities
     """
-    args = input_args.split(' ')
-    if input_args.lower() == 'exit':
+    if len(args) == 0:
+        return
+    elif args[0].lower() == 'exit':
         os.write(1,("Goodbye\n").encode())
         sys.exit(0)
-    elif len(args) == 0:
-        pass
     elif args[0] == 'cd':
         try:
-            os.chdir(args[1])
-            os.write(1, (os.getcwd()+"\n").encode())
+            if len(args) == 1:
+                os.chdir("..")
+            else:
+                os.chdir(args[1])
         except FileNotFoundError:
             os.write(1, ("Directory %s: No such file or directory\n" % args[1]).encode())
-    elif '/' in args[0]:
-        callExecve(args[0], args)
-        os.write(2, ("Command %s No such command.\n" % args[0]).encode())
-        sys.exit(1)# terminate with error
-
+    elif "|" in args:
+        piping(args)
     else:
-        execute(args)
+        rc = os.fork()
+        wait = True
+        if "&" in args:
+            args.remove("&")
+            wait = False
+        if rc < 0:
+            os.write(2,("fork failed, returning %d\n" % rc).encode())
+            sys.exit(1)
+        elif rc == 0:
+            execute(args)
+            sys.exit(0)
+        else:
+            if wait:
+                childpid = os.wait()
+        
+def redirection(args):
+    '''
+    Handles input/output redirection
+    '''
+    if '>' in args:
+        os.close(1)
+        os.open(args[args.index('>')+1], os.O_CREAT | os.O_WRONLY)
+        os.set_inheritable(1,True)
+        args.remove(args[args.index('>') + 1])
+        args.remove('>')
+    else:
+        os.close(0)
+        os.open(args[args.index('<')+1], os.O_RDONLY)
+        os.set_inheritable(0, True)
+        args.remove(args[args.index('<') + 1])
+        args.remove('<')
+    for dir in re.split(":", os.environ['PATH']):
+        program = "%s/%s" % (dir, args[0])
+        callExecve(program, args)
+    os.write(2, ("Child: Error: Could not exec %s\n" % args[0]).encode())
+    sys.exit(1)
+
+def piping(args):
+    '''
+    Handles piping
+    '''
+    left_pipe = args[0:args.index("|")]
+    right_pipe = args[args.index("|")+1:]
+    pr,pw = os.pipe()
+    rc = os.fork()
+    if rc < 0:
+        os.write(2, ("fork failed, returning %d\n" % rc).encode())
+        sys.exit(1)
+    elif rc == 0:
+        os.close(1)
+        os.dup(pw)
+        os.set_inheritable(1, True)
+        for fd in (pr,pw):
+            os.close(fd)
+        execute(left_pipe)
+        os.write(2, ("Could not exec %s\n" % left_pipe[0]).encode())
+        sys.exit(1)
+    else:
+        os.close(0)
+        os.dup(pr)
+        os.set_inheritable(0, True)
+        for fd in (pr,pw):
+            os.close(fd)
+        if "|" in right_pipe:
+            piping(right_pipe)
+        execute(right_pipe)
+        os.write(2, ("Could not exec %s\n" % right_pipe[0]).encode())
+        sys.exit(1)
 
 def execute(args):
     """
     forks and attempts to execute program using callExecve()
     """
-    rc = os.fork()
-    wait = True
-    if '&' in args:
-        wait = False
-    if rc < 0:
-        os.write(2, ("fork failed, returning %d\n" % rc).encode())
-        sys.exit(1)
-    elif rc == 0:
+    
+    #wait = True
+    if ">" in args or "<" in args:
+        redirection(args)
+    elif "/" in args[0]:
+        program = args[0]
+        call_execve(program, args)
+    else:
         for dir in re.split(":", os.environ['PATH']): # try each directory in the path
             program = "%s/%s" % (dir, args[0])
-            callExecve(program, args)
-        os.write(2, ("Command %s not found. Try again.\n" % args[0]).encode())
-        sys.exit(1) # terminate with error
+            call_execve(program, args)
+    os.write(2, ("Command %s not found. Try again.\n" % args[0]).encode())
+    sys.exit(1) # terminate with error
 
-    else:
-        if wait:
-            childpid = os.wait()
-            if childpid[1] != 0 and childpid[1] != 256:
-                os.write(2, ("Program terminated with exit code: %d\n" % childpid[1]).encode())
-
-
-def callExecve(program, args):
+def call_execve(program, args):
     """
     made to call execve for the programs that need it
     """
@@ -78,8 +136,10 @@ while True:
         if len(args) == 0:
             break
         args = args.decode().split("\n")
+        if not args:
+            continue
         for arg in args:
-            handleInput(arg)
+            handleInput(arg.split())
     except EOFError:
         sys.exit(1)
     
